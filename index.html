@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AnimalRTS Prototype</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="game"></div>
+      <aside id="hud">
+        <header>
+          <h1>AnimalRTS</h1>
+          <div id="resources">Food 0</div>
+        </header>
+        <section id="selection">
+          <h2>Selection</h2>
+          <div id="selection-body">ユニットを選択してください</div>
+        </section>
+        <section>
+          <h2>Production</h2>
+          <div id="production"></div>
+        </section>
+        <section>
+          <h2>Orders</h2>
+          <p>左クリック/ドラッグ: 選択</p>
+          <p>右クリック: 移動・攻撃・採集</p>
+          <p>W/A/S/D または画面端: カメラ移動</p>
+        </section>
+        <section id="log"></section>
+      </aside>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
