@@ -12,6 +12,7 @@ const ENEMY: FactionId = 'ocean';
 const ENEMY_AI_INTERVAL = 3;
 const ENEMY_FIRST_WAVE_DELAY = 58;
 const ENEMY_WAVE_INTERVAL = 34;
+type MissionStep = 'gather' | 'produce' | 'scout' | 'destroy';
 
 export class AnimalRTSScene extends Phaser.Scene {
   private terrain: Terrain[][] = [];
@@ -24,6 +25,7 @@ export class AnimalRTSScene extends Phaser.Scene {
   private terrainGfx!: Phaser.GameObjects.Graphics;
   private fogGfx!: Phaser.GameObjects.Graphics;
   private selectionGfx!: Phaser.GameObjects.Graphics;
+  private tutorialGfx!: Phaser.GameObjects.Graphics;
   private attackTargetRings = new Map<number, Phaser.GameObjects.Arc>();
   private explored = new Set<string>();
   private visible = new Set<string>();
@@ -37,6 +39,7 @@ export class AnimalRTSScene extends Phaser.Scene {
   private initialPlayerArmySize = 0;
   private hasGatheredFood = false;
   private hasIssuedReefAttack = false;
+  private currentMissionStep?: MissionStep;
   private logTimer = 0;
   private minimapCtx!: CanvasRenderingContext2D;
   private outcomeShown = false;
@@ -73,6 +76,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     this.drawTerrain();
     this.selectionGfx = this.add.graphics().setDepth(80);
     this.fogGfx = this.add.graphics().setDepth(120);
+    this.tutorialGfx = this.add.graphics().setDepth(140);
 
     const den = this.spawnUnit('den', 380, 880, PLAYER);
     const reef = this.spawnUnit('reefNest', 1910, 980, ENEMY);
@@ -100,6 +104,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     this.updateVision();
     this.updateHud();
     this.drawMinimap();
+    this.drawTutorialGuidance();
     this.log('まず Ant Swarm を選択し、近くの ✹ Berries を右クリックして Food を集めてください。');
   }
 
@@ -107,6 +112,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     const dt = deltaMs / 1000;
     this.handleCamera(dt);
     if (this.gameOver) {
+      this.tutorialGfx.clear();
       this.drawMinimap();
       return;
     }
@@ -114,6 +120,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     this.updateFog();
     this.updateVisibility();
     this.drawMinimap();
+    this.drawTutorialGuidance();
 
     this.aiTimer += dt;
     this.waveTimer += dt;
@@ -615,6 +622,72 @@ export class AnimalRTSScene extends Phaser.Scene {
     return [...this.units.values()].some((unit) => unit.faction === faction && unit.def.role === 'base' && !unit.underConstruction);
   }
 
+  private drawTutorialGuidance(): void {
+    this.tutorialGfx.clear();
+    if (!this.currentMissionStep || this.gameOver) return;
+
+    const pulse = (Math.sin(this.time.now / 240) + 1) / 2;
+    if (this.currentMissionStep === 'gather') {
+      const worker = this.findTutorialUnit('ant');
+      const resource = [...this.resources.values()].find((node) => node.type === 'berries' && this.explored.has(`${Math.floor(node.x / TILE)},${Math.floor(node.y / TILE)}`));
+      if (worker) this.drawTutorialPulse(worker.x, worker.y, worker.radius + 13, 0xf2c66d, pulse);
+      if (resource) this.drawTutorialPulse(resource.x, resource.y, 34, 0xf2c66d, pulse);
+      if (worker && resource) {
+        this.tutorialGfx.lineStyle(2, 0xf2c66d, 0.28 + pulse * 0.22);
+        this.tutorialGfx.lineBetween(worker.x, worker.y, resource.x, resource.y);
+      }
+      return;
+    }
+
+    if (this.currentMissionStep === 'produce') {
+      const base = this.findNearestBase(PLAYER, this.cameras.main.worldView.centerX, this.cameras.main.worldView.centerY);
+      if (base) this.drawTutorialPulse(base.x, base.y, base.radius + 16, 0xd9f59f, pulse);
+      return;
+    }
+
+    if (this.currentMissionStep === 'scout') {
+      const scout = this.findTutorialUnit('eagle') ?? [...this.units.values()].find((unit) => unit.faction === PLAYER && unit.def.role !== 'base');
+      if (scout) this.drawTutorialPulse(scout.x, scout.y, scout.radius + 13, 0xd9f59f, pulse);
+      this.drawEastArrow(pulse);
+      return;
+    }
+
+    const reef = this.units.get(this.factions.get(ENEMY)?.baseUnitId ?? -1);
+    if (reef) {
+      this.drawTutorialPulse(reef.x, reef.y, reef.radius + 16, 0xf06a57, pulse);
+    }
+  }
+
+  private drawTutorialPulse(x: number, y: number, radius: number, color: number, pulse: number): void {
+    this.tutorialGfx.lineStyle(3, color, 0.42 + pulse * 0.34);
+    this.tutorialGfx.strokeCircle(x, y, radius + pulse * 7);
+    this.tutorialGfx.lineStyle(1, 0xffffff, 0.22 + pulse * 0.2);
+    this.tutorialGfx.strokeCircle(x, y, radius + 10 + pulse * 8);
+  }
+
+  private drawEastArrow(pulse: number): void {
+    const cam = this.cameras.main;
+    const x = cam.scrollX + cam.width - 78;
+    const y = cam.scrollY + cam.height * 0.5;
+    const alpha = 0.42 + pulse * 0.38;
+    this.tutorialGfx.lineStyle(5, 0xd9f59f, alpha);
+    this.tutorialGfx.beginPath();
+    this.tutorialGfx.moveTo(x - 24, y - 24);
+    this.tutorialGfx.lineTo(x, y);
+    this.tutorialGfx.lineTo(x - 24, y + 24);
+    this.tutorialGfx.strokePath();
+    this.tutorialGfx.lineStyle(3, 0xffffff, alpha * 0.65);
+    this.tutorialGfx.beginPath();
+    this.tutorialGfx.moveTo(x - 52, y - 18);
+    this.tutorialGfx.lineTo(x - 34, y);
+    this.tutorialGfx.lineTo(x - 52, y + 18);
+    this.tutorialGfx.strokePath();
+  }
+
+  private findTutorialUnit(type: string): UnitEntity | undefined {
+    return [...this.units.values()].find((unit) => unit.faction === PLAYER && unit.def.id === type);
+  }
+
   private updateAttackTargetRings(): void {
     const targetIds = new Set<number>();
     for (const unit of this.units.values()) {
@@ -691,6 +764,23 @@ export class AnimalRTSScene extends Phaser.Scene {
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 1;
         ctx.strokeRect((unit.x / WORLD_W) * width - size, (unit.y / WORLD_H) * height - size, size * 2, size * 2);
+      }
+    }
+
+    const reef = this.units.get(this.factions.get(ENEMY)?.baseUnitId ?? -1);
+    if (reef) {
+      const reefKey = `${Math.floor(reef.x / TILE)},${Math.floor(reef.y / TILE)}`;
+      if (this.explored.has(reefKey) || this.hasIssuedReefAttack) {
+        const x = (reef.x / WORLD_W) * width;
+        const y = (reef.y / WORLD_H) * height;
+        const pulse = (Math.sin(this.time.now / 220) + 1) / 2;
+        ctx.strokeStyle = `rgba(240, 106, 87, ${0.45 + pulse * 0.45})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, 5 + pulse * 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = '#f06a57';
+        ctx.fillRect(x - 2, y - 2, 4, 4);
       }
     }
 
@@ -835,12 +925,21 @@ export class AnimalRTSScene extends Phaser.Scene {
       scout: victory || this.explored.has(reefTile ?? '') || this.hasIssuedReefAttack,
       destroy: victory
     };
-    const order = ['gather', 'produce', 'scout', 'destroy'];
+    const order: MissionStep[] = ['gather', 'produce', 'scout', 'destroy'];
     const current = order.find((step) => !completed[step]);
+    this.currentMissionStep = current;
     for (const item of [...this.hud.mission.querySelectorAll<HTMLLIElement>('li[data-step]')]) {
       const step = item.dataset.step ?? '';
       item.classList.toggle('done', completed[step]);
       item.classList.toggle('current', step === current);
+    }
+    this.updateProductionButtonHints(current);
+  }
+
+  private updateProductionButtonHints(current: MissionStep | undefined): void {
+    const highlighted = current === 'produce' ? new Set(['wolf', 'eagle', 'elephant']) : new Set<string>();
+    for (const button of [...this.hud.production.querySelectorAll<HTMLButtonElement>('button[data-unit]')]) {
+      button.classList.toggle('tutorial-highlight', highlighted.has(button.dataset.unit ?? ''));
     }
   }
 
