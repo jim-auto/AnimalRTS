@@ -37,11 +37,18 @@ export class AnimalRTSScene extends Phaser.Scene {
   private hasGatheredFood = false;
   private hasIssuedReefAttack = false;
   private logTimer = 0;
+  private minimapCtx!: CanvasRenderingContext2D;
+  private outcomeShown = false;
   private hud = {
     resources: document.querySelector<HTMLDivElement>('#resources')!,
     selection: document.querySelector<HTMLDivElement>('#selection-body')!,
     production: document.querySelector<HTMLDivElement>('#production')!,
     mission: document.querySelector<HTMLOListElement>('#mission-list')!,
+    minimap: document.querySelector<HTMLCanvasElement>('#minimap')!,
+    outcome: document.querySelector<HTMLDivElement>('#outcome')!,
+    outcomeTitle: document.querySelector<HTMLHeadingElement>('#outcome-title')!,
+    outcomeBody: document.querySelector<HTMLParagraphElement>('#outcome-body')!,
+    restart: document.querySelector<HTMLButtonElement>('#restart-button')!,
     log: document.querySelector<HTMLDivElement>('#log')!
   };
 
@@ -50,6 +57,11 @@ export class AnimalRTSScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.minimapCtx = this.hud.minimap.getContext('2d')!;
+    this.hud.outcome.hidden = true;
+    this.hud.restart.onclick = () => window.location.reload();
+    this.hud.minimap.onclick = (event) => this.centerCameraFromMinimap(event);
+
     this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
     this.cameras.main.centerOn(760, 900);
     this.input.mouse?.disableContextMenu();
@@ -86,16 +98,21 @@ export class AnimalRTSScene extends Phaser.Scene {
     this.wireInput();
     this.updateVision();
     this.updateHud();
+    this.drawMinimap();
     this.log('まず Ant Swarm を選択し、近くの ✹ Berries を右クリックして Food を集めてください。');
   }
 
   update(_: number, deltaMs: number): void {
     const dt = deltaMs / 1000;
     this.handleCamera(dt);
-    if (this.gameOver) return;
+    if (this.gameOver) {
+      this.drawMinimap();
+      return;
+    }
     this.updateUnits(dt);
     this.updateFog();
     this.updateVisibility();
+    this.drawMinimap();
 
     this.aiTimer += dt;
     this.waveTimer += dt;
@@ -499,15 +516,103 @@ export class AnimalRTSScene extends Phaser.Scene {
       unit.hpBar.destroy();
       this.units.delete(unit.id);
       if (unit.def.role === 'base') {
-      if (unit.underConstruction) {
-        this.log(`${unit.def.name} の建築現場が破壊されました。`);
-      } else {
-        this.log(unit.faction === PLAYER ? 'Forest Den が破壊されました。' : 'Reef Nest を破壊しました。勝利です。');
-        this.gameOver = true;
-        this.updateHud();
-      }
+        if (unit.underConstruction) {
+          this.log(`${unit.def.name} の建築現場が破壊されました。`);
+        } else if (unit.faction === ENEMY) {
+          this.finishGame(true);
+        } else if (!this.hasCompletedBase(PLAYER)) {
+          this.finishGame(false);
+        } else {
+          this.log(`${unit.def.name} が破壊されました。`);
+        }
       }
     }
+  }
+
+  private finishGame(victory: boolean): void {
+    if (this.outcomeShown) return;
+    this.gameOver = true;
+    this.outcomeShown = true;
+    this.hud.outcomeTitle.textContent = victory ? 'Victory' : 'Defeat';
+    this.hud.outcomeBody.textContent = victory
+      ? 'Reef Nest を破壊しました。陸上勢力の勝利です。'
+      : 'すべての拠点を失いました。海洋勢力に押し切られました。';
+    this.hud.outcome.hidden = false;
+    this.log(victory ? 'Reef Nest を破壊しました。勝利です。' : '拠点がすべて破壊されました。敗北です。');
+    this.updateHud();
+    this.drawMinimap();
+  }
+
+  private hasCompletedBase(faction: FactionId): boolean {
+    return [...this.units.values()].some((unit) => unit.faction === faction && unit.def.role === 'base' && !unit.underConstruction);
+  }
+
+  private drawMinimap(): void {
+    const ctx = this.minimapCtx;
+    const width = this.hud.minimap.width;
+    const height = this.hud.minimap.height;
+    const tileW = width / MAP_W;
+    const tileH = height / MAP_H;
+    const terrainColors: Record<Terrain, string> = {
+      grass: '#355b30',
+      forest: '#244726',
+      shore: '#7d8f5b',
+      water: '#286f83',
+      deepwater: '#123e62',
+      reef: '#4f9c8f'
+    };
+
+    ctx.clearRect(0, 0, width, height);
+    for (let y = 0; y < MAP_H; y += 1) {
+      for (let x = 0; x < MAP_W; x += 1) {
+        ctx.fillStyle = terrainColors[this.terrain[y][x]];
+        ctx.fillRect(x * tileW, y * tileH, Math.ceil(tileW), Math.ceil(tileH));
+        const key = `${x},${y}`;
+        if (!this.explored.has(key)) {
+          ctx.fillStyle = 'rgba(2, 4, 3, 0.74)';
+          ctx.fillRect(x * tileW, y * tileH, Math.ceil(tileW), Math.ceil(tileH));
+        } else if (!this.visible.has(key)) {
+          ctx.fillStyle = 'rgba(2, 4, 3, 0.38)';
+          ctx.fillRect(x * tileW, y * tileH, Math.ceil(tileW), Math.ceil(tileH));
+        }
+      }
+    }
+
+    for (const resource of this.resources.values()) {
+      const key = `${Math.floor(resource.x / TILE)},${Math.floor(resource.y / TILE)}`;
+      if (!this.explored.has(key)) continue;
+      ctx.fillStyle = resource.type === 'berries' ? '#f2c66d' : '#9af0ca';
+      ctx.fillRect((resource.x / WORLD_W) * width - 1.5, (resource.y / WORLD_H) * height - 1.5, 3, 3);
+    }
+
+    for (const unit of this.units.values()) {
+      const key = `${Math.floor(unit.x / TILE)},${Math.floor(unit.y / TILE)}`;
+      if (unit.faction !== PLAYER && !this.visible.has(key)) continue;
+      const size = unit.def.role === 'base' ? 5 : 3;
+      ctx.fillStyle = unit.faction === PLAYER ? '#d9f59f' : '#88d9ff';
+      ctx.fillRect((unit.x / WORLD_W) * width - size / 2, (unit.y / WORLD_H) * height - size / 2, size, size);
+      if (unit.selected) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1;
+        ctx.strokeRect((unit.x / WORLD_W) * width - size, (unit.y / WORLD_H) * height - size, size * 2, size * 2);
+      }
+    }
+
+    const cam = this.cameras.main;
+    ctx.strokeStyle = '#f2f7ee';
+    ctx.lineWidth = 1;
+    ctx.strokeRect((cam.scrollX / WORLD_W) * width, (cam.scrollY / WORLD_H) * height, (cam.width / WORLD_W) * width, (cam.height / WORLD_H) * height);
+  }
+
+  private centerCameraFromMinimap(event: MouseEvent): void {
+    const rect = this.hud.minimap.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * WORLD_W;
+    const y = ((event.clientY - rect.top) / rect.height) * WORLD_H;
+    const cam = this.cameras.main;
+    cam.centerOn(x, y);
+    cam.scrollX = Phaser.Math.Clamp(cam.scrollX, 0, WORLD_W - cam.width);
+    cam.scrollY = Phaser.Math.Clamp(cam.scrollY, 0, WORLD_H - cam.height);
+    this.drawMinimap();
   }
 
   private createProductionUi(): void {
@@ -619,7 +724,7 @@ export class AnimalRTSScene extends Phaser.Scene {
       const cost = UNIT_DEFS[button.dataset.unit ?? 'ant'].cost;
       const needsWorker = button.dataset.unit === 'fieldDen';
       const hasWorker = [...this.selectedIds].some((id) => this.units.get(id)?.def.role === 'worker');
-      button.disabled = (player?.food ?? 0) < cost || (needsWorker && !hasWorker);
+      button.disabled = this.gameOver || (player?.food ?? 0) < cost || (needsWorker && !hasWorker);
     }
     this.updateMission();
   }

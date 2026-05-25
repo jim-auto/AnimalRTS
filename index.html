@@ -7,12 +7,24 @@
   </head>
   <body>
     <div id="app">
-      <div id="game"></div>
+      <div id="game">
+        <div id="outcome" hidden>
+          <div id="outcome-panel">
+            <h2 id="outcome-title">Victory</h2>
+            <p id="outcome-body">Reef Nest を破壊しました。</p>
+            <button id="restart-button" type="button">Restart</button>
+          </div>
+        </div>
+      </div>
       <aside id="hud">
         <header>
           <h1>AnimalRTS</h1>
           <div id="resources">Food 0</div>
         </header>
+        <section id="map-section">
+          <h2>Map</h2>
+          <canvas id="minimap" width="260" height="174"></canvas>
+        </section>
         <section id="selection">
           <h2>Selection</h2>
           <div id="selection-body">ユニットを選択してください</div>
