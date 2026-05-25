@@ -49,6 +49,7 @@ export interface UnitEntity {
   label: Phaser.GameObjects.Text;
   ring: Phaser.GameObjects.Arc;
   hpBar: Phaser.GameObjects.Rectangle;
+  carryLabel: Phaser.GameObjects.Text;
 }
 
 export interface ResourceNode {

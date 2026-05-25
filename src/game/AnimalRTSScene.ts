@@ -24,6 +24,7 @@ export class AnimalRTSScene extends Phaser.Scene {
   private terrainGfx!: Phaser.GameObjects.Graphics;
   private fogGfx!: Phaser.GameObjects.Graphics;
   private selectionGfx!: Phaser.GameObjects.Graphics;
+  private attackTargetRings = new Map<number, Phaser.GameObjects.Arc>();
   private explored = new Set<string>();
   private visible = new Set<string>();
   private dragStart?: Phaser.Math.Vector2;
@@ -168,6 +169,14 @@ export class AnimalRTSScene extends Phaser.Scene {
     }).setOrigin(0.5).setDepth(60);
     const ring = this.add.circle(x, y, def.role === 'base' ? 34 : 17, 0xffffff, 0).setStrokeStyle(2, faction === PLAYER ? 0xcfe98c : 0x88d9ff, 0.9).setDepth(58);
     const hpBar = this.add.rectangle(x, y - (def.role === 'base' ? 45 : 27), 34, 4, 0x7fe36d).setOrigin(0.5).setDepth(61);
+    const carryLabel = this.add.text(x, y - (def.role === 'base' ? 62 : 40), '', {
+      color: '#f2c66d',
+      fontFamily: 'Inter, Arial',
+      fontSize: '11px',
+      fontStyle: '700',
+      stroke: '#162016',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(62).setVisible(false);
     const unit: UnitEntity = {
       id: this.nextUnitId++,
       def,
@@ -185,7 +194,8 @@ export class AnimalRTSScene extends Phaser.Scene {
       buildProgress: 0,
       label,
       ring,
-      hpBar
+      hpBar,
+      carryLabel
     };
     this.units.set(unit.id, unit);
     return unit;
@@ -291,12 +301,16 @@ export class AnimalRTSScene extends Phaser.Scene {
     if (enemy) {
       this.log(`${this.formatGroup(selected)}: ${enemy.def.name} を攻撃します。`);
       if (enemy.def.id === 'reefNest') this.hasIssuedReefAttack = true;
+      this.showCommandPing(enemy.x, enemy.y, 0xf06a57);
     } else if (resource && gatherers.length > 0) {
       this.log(`${this.formatGroup(gatherers)}: ${this.formatResource(resource)} を採集します。満載になったら自動で拠点へ戻ります。`);
+      this.showCommandPing(resource.x, resource.y, resource.type === 'berries' ? 0xf2c66d : 0x9af0ca);
     } else if (resource) {
       this.log(`${this.formatResource(resource)} は Ant Swarm などの採集ユニットで集められます。`);
+      this.showCommandPing(resource.x, resource.y, 0xf06a57);
     } else {
       this.log(`${this.formatGroup(selected)}: 移動します。`);
+      this.showCommandPing(x, y, 0xd9f59f);
     }
     selected.forEach((unit, index) => {
       unit.attackTargetId = enemy?.id;
@@ -325,6 +339,46 @@ export class AnimalRTSScene extends Phaser.Scene {
     return [...this.resources.values()].find((r) => Phaser.Math.Distance.Between(x, y, r.x, r.y) <= 32);
   }
 
+  private showCommandPing(x: number, y: number, color: number): void {
+    const outer = this.add.circle(x, y, 11, 0xffffff, 0).setStrokeStyle(2, color, 0.95).setDepth(82);
+    const dot = this.add.circle(x, y, 3, color, 0.95).setDepth(83);
+    this.tweens.add({
+      targets: outer,
+      scale: 2.1,
+      alpha: 0,
+      duration: 520,
+      ease: 'Cubic.easeOut',
+      onComplete: () => outer.destroy()
+    });
+    this.tweens.add({
+      targets: dot,
+      scale: 0.4,
+      alpha: 0,
+      duration: 360,
+      ease: 'Cubic.easeOut',
+      onComplete: () => dot.destroy()
+    });
+  }
+
+  private showDeliveredFood(unit: UnitEntity, amount: number): void {
+    const label = this.add.text(unit.x, unit.y - 48, `+${amount}`, {
+      color: '#f2c66d',
+      fontFamily: 'Inter, Arial',
+      fontSize: '14px',
+      fontStyle: '700',
+      stroke: '#162016',
+      strokeThickness: 3
+    }).setOrigin(0.5).setDepth(90);
+    this.tweens.add({
+      targets: label,
+      y: label.y - 24,
+      alpha: 0,
+      duration: 760,
+      ease: 'Cubic.easeOut',
+      onComplete: () => label.destroy()
+    });
+  }
+
   private updateUnits(dt: number): void {
     for (const unit of [...this.units.values()]) {
       unit.attackTimer = Math.max(0, unit.attackTimer - dt);
@@ -337,6 +391,7 @@ export class AnimalRTSScene extends Phaser.Scene {
       this.syncUnitGraphics(unit);
     }
     this.cleanupDestroyed();
+    this.updateAttackTargetRings();
   }
 
   private acquireTarget(unit: UnitEntity): void {
@@ -366,6 +421,7 @@ export class AnimalRTSScene extends Phaser.Scene {
         unit.carrying = 0;
         if (unit.faction === PLAYER) {
           this.hasGatheredFood = true;
+          this.showDeliveredFood(unit, delivered);
           this.log(`${unit.def.name} が Food ${delivered} を納品しました。`);
           this.updateHud();
         }
@@ -459,6 +515,13 @@ export class AnimalRTSScene extends Phaser.Scene {
     unit.label.setPosition(unit.x, unit.y);
     unit.ring.setPosition(unit.x, unit.y);
     unit.hpBar.setPosition(unit.x, unit.y - (unit.def.role === 'base' ? 45 : 27));
+    unit.carryLabel.setPosition(unit.x, unit.y - (unit.def.role === 'base' ? 62 : 42));
+    if (unit.def.gatherRate && (unit.carrying > 0 || unit.resourceTargetId)) {
+      unit.carryLabel.setText(`Food ${Math.floor(unit.carrying)}/45`);
+      unit.carryLabel.setVisible(true);
+    } else {
+      unit.carryLabel.setVisible(false);
+    }
     const ratio = unit.underConstruction ? unit.buildProgress / (unit.def.constructionTime ?? 1) : unit.hp / unit.def.maxHp;
     unit.hpBar.width = Math.max(4, 34 * Phaser.Math.Clamp(ratio, 0, 1));
     unit.hpBar.fillColor = unit.underConstruction ? 0xf0c15a : unit.hp / unit.def.maxHp < 0.35 ? 0xf06a57 : 0x7fe36d;
@@ -511,9 +574,12 @@ export class AnimalRTSScene extends Phaser.Scene {
     for (const unit of [...this.units.values()]) {
       if (unit.hp > 0) continue;
       if (unit.faction === PLAYER) this.selectedIds.delete(unit.id);
+      this.attackTargetRings.get(unit.id)?.destroy();
+      this.attackTargetRings.delete(unit.id);
       unit.label.destroy();
       unit.ring.destroy();
       unit.hpBar.destroy();
+      unit.carryLabel.destroy();
       this.units.delete(unit.id);
       if (unit.def.role === 'base') {
         if (unit.underConstruction) {
@@ -533,6 +599,8 @@ export class AnimalRTSScene extends Phaser.Scene {
     if (this.outcomeShown) return;
     this.gameOver = true;
     this.outcomeShown = true;
+    for (const ring of this.attackTargetRings.values()) ring.destroy();
+    this.attackTargetRings.clear();
     this.hud.outcomeTitle.textContent = victory ? 'Victory' : 'Defeat';
     this.hud.outcomeBody.textContent = victory
       ? 'Reef Nest を破壊しました。陸上勢力の勝利です。'
@@ -545,6 +613,34 @@ export class AnimalRTSScene extends Phaser.Scene {
 
   private hasCompletedBase(faction: FactionId): boolean {
     return [...this.units.values()].some((unit) => unit.faction === faction && unit.def.role === 'base' && !unit.underConstruction);
+  }
+
+  private updateAttackTargetRings(): void {
+    const targetIds = new Set<number>();
+    for (const unit of this.units.values()) {
+      if (unit.faction === PLAYER && unit.attackTargetId) targetIds.add(unit.attackTargetId);
+    }
+
+    for (const [targetId, ring] of [...this.attackTargetRings.entries()]) {
+      if (!targetIds.has(targetId) || !this.units.has(targetId)) {
+        ring.destroy();
+        this.attackTargetRings.delete(targetId);
+      }
+    }
+
+    for (const targetId of targetIds) {
+      const target = this.units.get(targetId);
+      if (!target) continue;
+      let ring = this.attackTargetRings.get(targetId);
+      if (!ring) {
+        ring = this.add.circle(target.x, target.y, target.radius + 10, 0xffffff, 0).setStrokeStyle(3, 0xf06a57, 0.95).setDepth(64);
+        this.attackTargetRings.set(targetId, ring);
+      }
+      const isVisible = target.faction === PLAYER || this.visible.has(`${Math.floor(target.x / TILE)},${Math.floor(target.y / TILE)}`);
+      ring.setPosition(target.x, target.y);
+      ring.setRadius(target.radius + 10 + Math.sin(this.time.now / 170) * 2);
+      ring.setVisible(isVisible);
+    }
   }
 
   private drawMinimap(): void {
@@ -880,6 +976,7 @@ export class AnimalRTSScene extends Phaser.Scene {
       const isVisible = unit.faction === PLAYER || this.visible.has(`${Math.floor(unit.x / TILE)},${Math.floor(unit.y / TILE)}`);
       unit.label.setVisible(isVisible);
       unit.hpBar.setVisible(isVisible);
+      unit.carryLabel.setVisible(isVisible && unit.def.gatherRate !== undefined && (unit.carrying > 0 || unit.resourceTargetId !== undefined));
       if (!unit.selected) unit.ring.setVisible(false);
     }
     for (const resource of this.resources.values()) {
