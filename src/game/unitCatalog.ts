@@ -46,7 +46,7 @@ export const UNIT_DEFS: Record<string, UnitDefinition> = {
     role: 'base',
     moveLayer: 'surface',
     cost: 0,
-    maxHp: 900,
+    maxHp: 680,
     speed: 0,
     attackDamage: 0,
     attackRange: 0,

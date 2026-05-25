@@ -9,6 +9,9 @@ const WORLD_W = TILE * MAP_W;
 const WORLD_H = TILE * MAP_H;
 const PLAYER: FactionId = 'land';
 const ENEMY: FactionId = 'ocean';
+const ENEMY_AI_INTERVAL = 3;
+const ENEMY_FIRST_WAVE_DELAY = 58;
+const ENEMY_WAVE_INTERVAL = 34;
 
 export class AnimalRTSScene extends Phaser.Scene {
   private terrain: Terrain[][] = [];
@@ -29,11 +32,16 @@ export class AnimalRTSScene extends Phaser.Scene {
   private gameOver = false;
   private aiTimer = 0;
   private waveTimer = 0;
+  private wavesLaunched = 0;
+  private initialPlayerArmySize = 0;
+  private hasGatheredFood = false;
+  private hasIssuedReefAttack = false;
   private logTimer = 0;
   private hud = {
     resources: document.querySelector<HTMLDivElement>('#resources')!,
     selection: document.querySelector<HTMLDivElement>('#selection-body')!,
     production: document.querySelector<HTMLDivElement>('#production')!,
+    mission: document.querySelector<HTMLOListElement>('#mission-list')!,
     log: document.querySelector<HTMLDivElement>('#log')!
   };
 
@@ -56,12 +64,13 @@ export class AnimalRTSScene extends Phaser.Scene {
     const den = this.spawnUnit('den', 380, 880, PLAYER);
     const reef = this.spawnUnit('reefNest', 1910, 980, ENEMY);
     this.factions.set(PLAYER, { id: PLAYER, food: 280, baseUnitId: den.id });
-    this.factions.set(ENEMY, { id: ENEMY, food: 300, baseUnitId: reef.id });
+    this.factions.set(ENEMY, { id: ENEMY, food: 180, baseUnitId: reef.id });
 
     this.spawnUnit('ant', 480, 815, PLAYER);
     this.spawnUnit('ant', 510, 910, PLAYER);
     this.spawnUnit('wolf', 585, 870, PLAYER);
     this.spawnUnit('eagle', 530, 770, PLAYER);
+    this.initialPlayerArmySize = this.countPlayerArmy();
     this.spawnUnit('dolphin', 2020, 900, ENEMY);
     this.spawnUnit('dolphin', 2050, 1060, ENEMY);
     this.spawnUnit('crab', 1990, 990, ENEMY);
@@ -77,7 +86,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     this.wireInput();
     this.updateVision();
     this.updateHud();
-    this.log('陸上勢力: 食料を集め、海洋勢力のReef Nestを破壊してください。');
+    this.log('まず Ant Swarm を選択し、近くの ✹ Berries を右クリックして Food を集めてください。');
   }
 
   update(_: number, deltaMs: number): void {
@@ -91,7 +100,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     this.aiTimer += dt;
     this.waveTimer += dt;
     this.logTimer += dt;
-    if (this.aiTimer > 1.2) {
+    if (this.aiTimer > ENEMY_AI_INTERVAL) {
       this.aiTimer = 0;
       this.runAi();
       this.updateHud();
@@ -166,12 +175,13 @@ export class AnimalRTSScene extends Phaser.Scene {
   }
 
   private spawnResource(type: ResourceNode['type'], x: number, y: number, amount: number, layer: MoveLayer): void {
+    const ring = this.add.circle(x, y, 25, 0xffffff, 0).setStrokeStyle(2, type === 'berries' ? 0xf2c66d : 0x9af0ca, 0.75).setDepth(44);
     const label = this.add.text(x, y, type === 'berries' ? '✹' : '✦', {
       color: type === 'berries' ? '#f2c66d' : '#9af0ca',
       fontSize: '24px',
       fontStyle: '700'
     }).setOrigin(0.5).setDepth(45);
-    this.resources.set(this.nextResourceId, { id: this.nextResourceId, type, x, y, amount, layer, label });
+    this.resources.set(this.nextResourceId, { id: this.nextResourceId, type, x, y, amount, layer, label, ring });
     this.nextResourceId += 1;
   }
 
@@ -254,12 +264,26 @@ export class AnimalRTSScene extends Phaser.Scene {
 
   private issueCommand(x: number, y: number): void {
     const selected = [...this.selectedIds].map((id) => this.units.get(id)).filter((u): u is UnitEntity => Boolean(u));
-    if (selected.length === 0) return;
+    if (selected.length === 0) {
+      this.log('ユニットを選択してから右クリックで命令してください。');
+      return;
+    }
     const enemy = this.findUnitAt(x, y, ENEMY);
     const resource = this.findResourceAt(x, y);
+    const gatherers = resource ? selected.filter((unit) => unit.def.gatherRate && this.canOccupy(unit.def.moveLayer, resource.x, resource.y)) : [];
+    if (enemy) {
+      this.log(`${this.formatGroup(selected)}: ${enemy.def.name} を攻撃します。`);
+      if (enemy.def.id === 'reefNest') this.hasIssuedReefAttack = true;
+    } else if (resource && gatherers.length > 0) {
+      this.log(`${this.formatGroup(gatherers)}: ${this.formatResource(resource)} を採集します。満載になったら自動で拠点へ戻ります。`);
+    } else if (resource) {
+      this.log(`${this.formatResource(resource)} は Ant Swarm などの採集ユニットで集められます。`);
+    } else {
+      this.log(`${this.formatGroup(selected)}: 移動します。`);
+    }
     selected.forEach((unit, index) => {
       unit.attackTargetId = enemy?.id;
-      unit.resourceTargetId = !enemy && resource && unit.def.gatherRate ? resource.id : undefined;
+      unit.resourceTargetId = !enemy && resource && unit.def.gatherRate && this.canOccupy(unit.def.moveLayer, resource.x, resource.y) ? resource.id : undefined;
       if (enemy) {
         unit.targetX = enemy.x;
         unit.targetY = enemy.y;
@@ -273,6 +297,7 @@ export class AnimalRTSScene extends Phaser.Scene {
         unit.targetY = y + Math.sin(angle) * spread;
       }
     });
+    this.updateHud();
   }
 
   private findUnitAt(x: number, y: number, faction?: FactionId): UnitEntity | undefined {
@@ -319,8 +344,14 @@ export class AnimalRTSScene extends Phaser.Scene {
       unit.targetX = base.x;
       unit.targetY = base.y;
       if (Phaser.Math.Distance.Between(unit.x, unit.y, base.x, base.y) < 62) {
-        this.factions.get(unit.faction)!.food += Math.floor(unit.carrying);
+        const delivered = Math.floor(unit.carrying);
+        this.factions.get(unit.faction)!.food += delivered;
         unit.carrying = 0;
+        if (unit.faction === PLAYER) {
+          this.hasGatheredFood = true;
+          this.log(`${unit.def.name} が Food ${delivered} を納品しました。`);
+          this.updateHud();
+        }
         unit.targetX = resource.x;
         unit.targetY = resource.y;
       }
@@ -332,6 +363,7 @@ export class AnimalRTSScene extends Phaser.Scene {
       unit.carrying += taken;
       if (resource.amount <= 0) {
         resource.label.destroy();
+        resource.ring.destroy();
         this.resources.delete(resource.id);
         unit.resourceTargetId = undefined;
       }
@@ -472,6 +504,7 @@ export class AnimalRTSScene extends Phaser.Scene {
       } else {
         this.log(unit.faction === PLAYER ? 'Forest Den が破壊されました。' : 'Reef Nest を破壊しました。勝利です。');
         this.gameOver = true;
+        this.updateHud();
       }
       }
     }
@@ -498,7 +531,18 @@ export class AnimalRTSScene extends Phaser.Scene {
     const def = UNIT_DEFS[type];
     const state = this.factions.get(faction);
     const base = faction === PLAYER ? this.findSelectedBase() ?? this.findNearestBase(faction, this.cameras.main.worldView.centerX, this.cameras.main.worldView.centerY) : this.units.get(state?.baseUnitId ?? -1);
-    if (!state || !base || base.underConstruction || state.food < def.cost) return false;
+    if (!state || !base) {
+      if (faction === PLAYER) this.log('生産できる拠点がありません。');
+      return false;
+    }
+    if (base.underConstruction) {
+      if (faction === PLAYER) this.log(`${base.def.name} は建築中です。完成すると生産できます。`);
+      return false;
+    }
+    if (state.food < def.cost) {
+      if (faction === PLAYER) this.log(`${def.name} には Food ${def.cost} が必要です。`);
+      return false;
+    }
     if (base.productionQueue.length >= 5) {
       if (faction === PLAYER) this.log('この拠点の生産キューは満杯です。');
       return false;
@@ -566,9 +610,10 @@ export class AnimalRTSScene extends Phaser.Scene {
       const unit = selected[0];
       const queue = this.formatQueue(unit);
       const construction = this.formatConstruction(unit);
-      this.hud.selection.textContent = `${unit.def.name} HP ${Math.ceil(unit.hp)}/${unit.def.maxHp}${construction}${queue} · ${unit.def.description}`;
+      const status = this.formatStatus(unit);
+      this.hud.selection.textContent = `${unit.def.name} HP ${Math.ceil(unit.hp)}/${unit.def.maxHp}${construction}${queue}${status} · ${unit.def.description}`;
     } else {
-      this.hud.selection.textContent = `${selected.length} units selected`;
+      this.hud.selection.textContent = `${this.formatGroup(selected)} selected · 右クリックでまとめて移動/攻撃できます。`;
     }
     for (const button of [...this.hud.production.querySelectorAll('button')]) {
       const cost = UNIT_DEFS[button.dataset.unit ?? 'ant'].cost;
@@ -576,6 +621,59 @@ export class AnimalRTSScene extends Phaser.Scene {
       const hasWorker = [...this.selectedIds].some((id) => this.units.get(id)?.def.role === 'worker');
       button.disabled = (player?.food ?? 0) < cost || (needsWorker && !hasWorker);
     }
+    this.updateMission();
+  }
+
+  private updateMission(): void {
+    const reef = this.units.get(this.factions.get(ENEMY)?.baseUnitId ?? -1);
+    const reefTile = reef ? `${Math.floor(reef.x / TILE)},${Math.floor(reef.y / TILE)}` : undefined;
+    const victory = !reef;
+    const completed: Record<string, boolean> = {
+      gather: victory || this.hasGatheredFood,
+      produce: victory || this.countPlayerArmy() > this.initialPlayerArmySize,
+      scout: victory || this.explored.has(reefTile ?? '') || this.hasIssuedReefAttack,
+      destroy: victory
+    };
+    const order = ['gather', 'produce', 'scout', 'destroy'];
+    const current = order.find((step) => !completed[step]);
+    for (const item of [...this.hud.mission.querySelectorAll<HTMLLIElement>('li[data-step]')]) {
+      const step = item.dataset.step ?? '';
+      item.classList.toggle('done', completed[step]);
+      item.classList.toggle('current', step === current);
+    }
+  }
+
+  private countPlayerArmy(): number {
+    return [...this.units.values()].filter((unit) => unit.faction === PLAYER && unit.def.role !== 'base').length;
+  }
+
+  private formatGroup(units: UnitEntity[]): string {
+    const counts = new Map<string, number>();
+    for (const unit of units) counts.set(unit.def.name, (counts.get(unit.def.name) ?? 0) + 1);
+    return [...counts.entries()].map(([name, count]) => (count > 1 ? `${name} x${count}` : name)).join(', ');
+  }
+
+  private formatResource(resource: ResourceNode): string {
+    return resource.type === 'berries' ? 'Berries' : 'Kelp';
+  }
+
+  private formatStatus(unit: UnitEntity): string {
+    if (unit.attackTargetId) {
+      const target = this.units.get(unit.attackTargetId);
+      return target ? ` · Attacking ${target.def.name}` : '';
+    }
+    if (unit.resourceTargetId) {
+      const resource = this.resources.get(unit.resourceTargetId);
+      if (!resource) return '';
+      const carrying = Math.floor(unit.carrying);
+      return carrying >= 45
+        ? ` · Returning Food ${carrying}/45`
+        : ` · Gathering ${this.formatResource(resource)} ${carrying}/45`;
+    }
+    if (unit.targetX !== undefined && unit.targetY !== undefined) {
+      return ' · Moving';
+    }
+    return unit.carrying > 0 ? ` · Carrying Food ${Math.floor(unit.carrying)}/45` : '';
   }
 
   private log(message: string): void {
@@ -587,10 +685,11 @@ export class AnimalRTSScene extends Phaser.Scene {
     const reef = this.units.get(ocean?.baseUnitId ?? -1);
     if (this.gameOver) return;
     if (!ocean || !reef) return;
-    if (ocean.food >= 90 && reef.productionQueue.length < 3) {
+    if (ocean.food >= 100 && reef.productionQueue.length < 2) {
       const choice = AI_PRODUCTION[Phaser.Math.Between(0, AI_PRODUCTION.length - 1)];
       this.tryProduce(choice, ENEMY);
     }
+    const waveDelay = this.wavesLaunched === 0 ? ENEMY_FIRST_WAVE_DELAY : ENEMY_WAVE_INTERVAL;
     for (const unit of this.units.values()) {
       if (unit.faction !== ENEMY || unit.def.role === 'base') continue;
       if (unit.def.gatherRate && !unit.resourceTargetId) {
@@ -601,7 +700,7 @@ export class AnimalRTSScene extends Phaser.Scene {
           unit.targetY = resource.y;
         }
       }
-      if (this.waveTimer > 18 && unit.def.role !== 'worker') {
+      if (this.waveTimer > waveDelay && unit.def.role !== 'worker') {
         const target = this.units.get(this.factions.get(PLAYER)?.baseUnitId ?? -1);
         if (target) {
           unit.attackTargetId = target.id;
@@ -610,8 +709,9 @@ export class AnimalRTSScene extends Phaser.Scene {
         }
       }
     }
-    if (this.waveTimer > 18) {
+    if (this.waveTimer > waveDelay) {
       this.waveTimer = 0;
+      this.wavesLaunched += 1;
       this.log('海洋勢力が群れで攻勢を開始しました。');
     }
   }
@@ -679,7 +779,9 @@ export class AnimalRTSScene extends Phaser.Scene {
     }
     for (const resource of this.resources.values()) {
       const key = `${Math.floor(resource.x / TILE)},${Math.floor(resource.y / TILE)}`;
-      resource.label.setVisible(this.explored.has(key));
+      const isExplored = this.explored.has(key);
+      resource.label.setVisible(isExplored);
+      resource.ring.setVisible(isExplored);
     }
   }
 

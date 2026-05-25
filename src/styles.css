@@ -33,6 +33,7 @@ body,
   display: flex;
   flex-direction: column;
   gap: 14px;
+  overflow: auto;
 }
 
 h1,
@@ -70,6 +71,30 @@ p {
   color: #c9d6c2;
   font-size: 13px;
   line-height: 1.45;
+}
+
+#mission-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 22px;
+  color: #c9d6c2;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+#mission-list li {
+  padding-left: 2px;
+}
+
+#mission-list li.current {
+  color: #f2f7ee;
+  font-weight: 700;
+}
+
+#mission-list li.done {
+  color: #91b781;
+  text-decoration: line-through;
 }
 
 #production {
@@ -110,6 +135,5 @@ button:disabled {
     border-left: 0;
     border-top: 1px solid #334237;
     max-height: 36vh;
-    overflow: auto;
   }
 }

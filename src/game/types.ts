@@ -59,6 +59,7 @@ export interface ResourceNode {
   amount: number;
   layer: MoveLayer;
   label: Phaser.GameObjects.Text;
+  ring: Phaser.GameObjects.Arc;
 }
 
 export interface FactionState {
