@@ -2,6 +2,10 @@
 
 AnimalRTS は、動物たちが陸・海・空・深海で戦うブラウザ RTS プロトタイプです。現時点では GitHub Pages でそのまま公開できる最小プレイ可能版として、陸上勢力を操作して海洋勢力の拠点を破壊する構成です。
 
+## Play
+
+https://jim-auto.github.io/AnimalRTS/
+
 ## 現在の内容
 
 - Vite + TypeScript + Phaser 3
@@ -10,9 +14,13 @@ AnimalRTS は、動物たちが陸・海・空・深海で戦うブラウザ RTS
 - ユニット選択、移動、攻撃、資源回収、ユニット生産、前線拠点建築
 - 拠点ごとの生産キューと生産時間
 - 建築中の拠点、作業進捗、完成後の生産/納品解禁
-- 簡易敵 AI
+- グリッド A* 経路探索
+- 敵襲タイマー、Threat HUD、ミニマップ警告
+- 敵襲時の拠点被弾通知と近くの部隊の自動迎撃
+- 簡易敵 AI とウェーブ攻勢
+- 簡易サウンドフィードバック
 - Fog of War
-- 地形と移動レイヤー: ground / air / surface / deepsea
+- 地形と移動レイヤー: ground / air / surface / deepsea / amphibious
 - GitHub Actions による GitHub Pages デプロイ
 
 ## 操作
@@ -25,6 +33,7 @@ AnimalRTS は、動物たちが陸・海・空・深海で戦うブラウザ RTS
 - Ant Swarm 選択中に `Build Field Den`: 前線拠点を建築
 - 建築現場は Ant Swarm が近くで作業すると完成
 - 建築モード中の右クリック: 建築キャンセル
+- Threat: 次の敵襲、敵戦力、Reef Nest の残り HP を確認
 
 ## ローカル起動
 
@@ -74,7 +83,7 @@ npm run build
 
 主な項目:
 
-- `moveLayer`: `ground`, `air`, `surface`, `deepsea`
+- `moveLayer`: `ground`, `air`, `surface`, `deepsea`, `amphibious`
 - `role`: `worker`, `scout`, `soldier`, `siege`, `base`
 - `sight`: Fog of War に影響する視界
 - `gatherRate`: 資源採集可能ユニットのみ設定
@@ -86,7 +95,6 @@ npm run build
 
 ## 次に拡張しやすい箇所
 
-- グリッド A* 経路探索
 - ユニットごとの特殊能力
 - 建築予約、複数ワーカーによる建築速度ボーナス
 - 群れ AI、フォーメーション、優先ターゲット
