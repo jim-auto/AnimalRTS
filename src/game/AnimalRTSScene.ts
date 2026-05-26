@@ -12,8 +12,9 @@ const ENEMY: FactionId = 'ocean';
 const ENEMY_AI_INTERVAL = 3;
 const ENEMY_FIRST_WAVE_DELAY = 58;
 const ENEMY_WAVE_INTERVAL = 34;
+const ENEMY_WAVE_WARNING = 12;
 type MissionStep = 'gather' | 'produce' | 'scout' | 'destroy';
-type SoundCue = 'command' | 'gather' | 'deliver' | 'produce' | 'victory' | 'defeat';
+type SoundCue = 'command' | 'gather' | 'deliver' | 'produce' | 'alert' | 'victory' | 'defeat';
 
 export class AnimalRTSScene extends Phaser.Scene {
   private terrain: Terrain[][] = [];
@@ -37,6 +38,8 @@ export class AnimalRTSScene extends Phaser.Scene {
   private aiTimer = 0;
   private waveTimer = 0;
   private wavesLaunched = 0;
+  private waveWarningShown = false;
+  private lastDefenseCallAt = -9999;
   private initialPlayerArmySize = 0;
   private hasGatheredFood = false;
   private hasIssuedReefAttack = false;
@@ -48,6 +51,7 @@ export class AnimalRTSScene extends Phaser.Scene {
   private hud = {
     resources: document.querySelector<HTMLDivElement>('#resources')!,
     selection: document.querySelector<HTMLDivElement>('#selection-body')!,
+    threat: document.querySelector<HTMLDivElement>('#threat')!,
     queue: document.querySelector<HTMLDivElement>('#queue')!,
     production: document.querySelector<HTMLDivElement>('#production')!,
     mission: document.querySelector<HTMLOListElement>('#mission-list')!,
@@ -131,6 +135,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     if (this.logTimer > 0.25) {
       this.logTimer = 0;
       this.updateQueueHud();
+      this.updateThreatHud();
     }
     if (this.aiTimer > ENEMY_AI_INTERVAL) {
       this.aiTimer = 0;
@@ -406,6 +411,7 @@ export class AnimalRTSScene extends Phaser.Scene {
       gather: { frequency: 610, duration: 0.09, type: 'sine', gain: 0.035 },
       deliver: { frequency: 820, duration: 0.14, type: 'sine', gain: 0.045 },
       produce: { frequency: 520, duration: 0.16, type: 'square', gain: 0.026 },
+      alert: { frequency: 260, duration: 0.18, type: 'sawtooth', gain: 0.03 },
       victory: { frequency: 740, duration: 0.28, type: 'triangle', gain: 0.045 },
       defeat: { frequency: 180, duration: 0.35, type: 'sawtooth', gain: 0.03 }
     };
@@ -414,6 +420,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     const gain = this.audioContext.createGain();
     oscillator.type = preset.type;
     oscillator.frequency.setValueAtTime(preset.frequency, now);
+    if (cue === 'alert') oscillator.frequency.exponentialRampToValueAtTime(preset.frequency * 0.72, now + preset.duration);
     if (cue === 'victory') oscillator.frequency.exponentialRampToValueAtTime(preset.frequency * 1.45, now + preset.duration);
     if (cue === 'defeat') oscillator.frequency.exponentialRampToValueAtTime(Math.max(60, preset.frequency * 0.55), now + preset.duration);
     gain.gain.setValueAtTime(0.0001, now);
@@ -568,6 +575,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     const terrain = this.terrain[ty][tx];
     if (layer === 'ground') return terrain === 'grass' || terrain === 'forest' || terrain === 'shore';
     if (layer === 'surface') return terrain === 'water' || terrain === 'shore' || terrain === 'reef';
+    if (layer === 'amphibious') return terrain === 'grass' || terrain === 'forest' || terrain === 'shore' || terrain === 'water' || terrain === 'reef';
     return terrain === 'deepwater' || terrain === 'reef' || terrain === 'water';
   }
 
@@ -656,8 +664,9 @@ export class AnimalRTSScene extends Phaser.Scene {
       unit.pathGoalY = undefined;
       return;
     }
-    const distance = Phaser.Math.Distance.Between(unit.x, unit.y, target.x, target.y);
-    if (distance > unit.def.attackRange) {
+    const centerDistance = Phaser.Math.Distance.Between(unit.x, unit.y, target.x, target.y);
+    const edgeDistance = Math.max(0, centerDistance - unit.radius - target.radius);
+    if (edgeDistance > unit.def.attackRange) {
       if (unit.pathGoalX === undefined || unit.pathGoalY === undefined || Phaser.Math.Distance.Between(unit.pathGoalX, unit.pathGoalY, target.x, target.y) > 32) {
         this.setUnitDestination(unit, target.x, target.y);
       }
@@ -672,7 +681,29 @@ export class AnimalRTSScene extends Phaser.Scene {
       const packBonus = unit.def.id === 'wolf' ? 1 + this.countNearbyAttackers(target.id, 'wolf') * 0.08 : 1;
       target.hp -= unit.def.attackDamage * packBonus;
       unit.attackTimer = unit.def.attackCooldown;
+      if (target.faction === PLAYER) this.handlePlayerDamage(target, unit);
     }
+  }
+
+  private handlePlayerDamage(target: UnitEntity, attacker: UnitEntity): void {
+    if (this.time.now - this.lastDefenseCallAt < 4800) return;
+    this.lastDefenseCallAt = this.time.now;
+    const defenders = [...this.units.values()].filter((unit) => {
+      if (unit.faction !== PLAYER || unit.def.role === 'base' || unit.def.attackDamage <= 0) return false;
+      if (unit.attackTargetId === attacker.id) return false;
+      return Phaser.Math.Distance.Between(unit.x, unit.y, target.x, target.y) < 520;
+    });
+    for (const defender of defenders) {
+      defender.attackTargetId = attacker.id;
+      defender.resourceTargetId = undefined;
+      this.setUnitDestination(defender, attacker.x, attacker.y);
+    }
+    this.showCommandPing(target.x, target.y, 0xf06a57);
+    this.playSound('alert');
+    this.log(defenders.length > 0
+      ? `${target.def.name} が攻撃されています。近くの部隊が迎撃します。`
+      : `${target.def.name} が攻撃されています。部隊を戻して防衛してください。`);
+    this.updateHud();
   }
 
   private countNearbyAttackers(targetId: number, type: string): number {
@@ -717,6 +748,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     const terrain = this.terrainAt(x, y);
     if (layer === 'ground') return terrain === 'grass' || terrain === 'forest' || terrain === 'shore';
     if (layer === 'surface') return terrain === 'water' || terrain === 'shore' || terrain === 'reef';
+    if (layer === 'amphibious') return terrain === 'grass' || terrain === 'forest' || terrain === 'shore' || terrain === 'water' || terrain === 'reef';
     return terrain === 'deepwater' || terrain === 'reef' || terrain === 'water';
   }
 
@@ -836,9 +868,12 @@ export class AnimalRTSScene extends Phaser.Scene {
 
   private drawTutorialGuidance(): void {
     this.tutorialGfx.clear();
-    if (!this.currentMissionStep || this.gameOver) return;
+    if (this.gameOver) return;
 
     const pulse = (Math.sin(this.time.now / 240) + 1) / 2;
+    this.drawThreatWarning(pulse);
+    if (!this.currentMissionStep) return;
+
     if (this.currentMissionStep === 'gather') {
       const worker = this.findTutorialUnit('ant');
       const resource = [...this.resources.values()].find((node) => node.type === 'berries' && this.explored.has(`${Math.floor(node.x / TILE)},${Math.floor(node.y / TILE)}`));
@@ -870,6 +905,32 @@ export class AnimalRTSScene extends Phaser.Scene {
     }
   }
 
+  private drawThreatWarning(pulse: number): void {
+    const threat = this.findNearestIncomingEnemy();
+    if (!threat) return;
+    const cam = this.cameras.main;
+    const margin = 34;
+    const screenLeft = cam.scrollX + margin;
+    const screenRight = cam.scrollX + cam.width - margin;
+    const screenTop = cam.scrollY + margin;
+    const screenBottom = cam.scrollY + cam.height - margin;
+    const onScreen = threat.x > cam.scrollX && threat.x < cam.scrollX + cam.width && threat.y > cam.scrollY && threat.y < cam.scrollY + cam.height;
+    const x = Phaser.Math.Clamp(threat.x, screenLeft, screenRight);
+    const y = Phaser.Math.Clamp(threat.y, screenTop, screenBottom);
+    this.tutorialGfx.lineStyle(3, 0xf06a57, 0.46 + pulse * 0.34);
+    if (onScreen) {
+      this.tutorialGfx.strokeCircle(threat.x, threat.y, threat.radius + 16 + pulse * 8);
+      return;
+    }
+    const angle = Math.atan2(threat.y - cam.worldView.centerY, threat.x - cam.worldView.centerX);
+    this.tutorialGfx.beginPath();
+    this.tutorialGfx.moveTo(x + Math.cos(angle) * 18, y + Math.sin(angle) * 18);
+    this.tutorialGfx.lineTo(x + Math.cos(angle + 2.45) * 14, y + Math.sin(angle + 2.45) * 14);
+    this.tutorialGfx.lineTo(x + Math.cos(angle - 2.45) * 14, y + Math.sin(angle - 2.45) * 14);
+    this.tutorialGfx.closePath();
+    this.tutorialGfx.strokePath();
+  }
+
   private drawTutorialPulse(x: number, y: number, radius: number, color: number, pulse: number): void {
     this.tutorialGfx.lineStyle(3, color, 0.42 + pulse * 0.34);
     this.tutorialGfx.strokeCircle(x, y, radius + pulse * 7);
@@ -898,6 +959,23 @@ export class AnimalRTSScene extends Phaser.Scene {
 
   private findTutorialUnit(type: string): UnitEntity | undefined {
     return [...this.units.values()].find((unit) => unit.faction === PLAYER && unit.def.id === type);
+  }
+
+  private isIncomingEnemy(unit: UnitEntity): boolean {
+    if (unit.faction !== ENEMY || !unit.attackTargetId) return false;
+    return this.units.get(unit.attackTargetId)?.faction === PLAYER;
+  }
+
+  private incomingEnemies(): UnitEntity[] {
+    return [...this.units.values()].filter((unit) => this.isIncomingEnemy(unit));
+  }
+
+  private findNearestIncomingEnemy(): UnitEntity | undefined {
+    const base = this.findNearestBase(PLAYER, this.cameras.main.worldView.centerX, this.cameras.main.worldView.centerY);
+    const anchorX = base?.x ?? this.cameras.main.worldView.centerX;
+    const anchorY = base?.y ?? this.cameras.main.worldView.centerY;
+    return this.incomingEnemies()
+      .sort((a, b) => Phaser.Math.Distance.Between(a.x, a.y, anchorX, anchorY) - Phaser.Math.Distance.Between(b.x, b.y, anchorX, anchorY))[0];
   }
 
   private updateAttackTargetRings(): void {
@@ -968,10 +1046,21 @@ export class AnimalRTSScene extends Phaser.Scene {
 
     for (const unit of this.units.values()) {
       const key = `${Math.floor(unit.x / TILE)},${Math.floor(unit.y / TILE)}`;
-      if (unit.faction !== PLAYER && !this.visible.has(key)) continue;
+      const incoming = this.isIncomingEnemy(unit);
+      if (unit.faction !== PLAYER && !this.visible.has(key) && !incoming) continue;
       const size = unit.def.role === 'base' ? 5 : 3;
-      ctx.fillStyle = unit.faction === PLAYER ? '#d9f59f' : '#88d9ff';
+      ctx.fillStyle = unit.faction === PLAYER ? '#d9f59f' : incoming ? '#f06a57' : '#88d9ff';
       ctx.fillRect((unit.x / WORLD_W) * width - size / 2, (unit.y / WORLD_H) * height - size / 2, size, size);
+      if (incoming) {
+        const x = (unit.x / WORLD_W) * width;
+        const y = (unit.y / WORLD_H) * height;
+        const pulse = (Math.sin(this.time.now / 180) + 1) / 2;
+        ctx.strokeStyle = `rgba(240, 106, 87, ${0.45 + pulse * 0.45})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(x, y, 4 + pulse * 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       if (unit.selected) {
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 1;
@@ -1124,6 +1213,7 @@ export class AnimalRTSScene extends Phaser.Scene {
       button.disabled = this.gameOver || (player?.food ?? 0) < cost || (needsWorker && !hasWorker);
     }
     this.updateQueueHud();
+    this.updateThreatHud();
     this.updateMission();
   }
 
@@ -1151,6 +1241,49 @@ export class AnimalRTSScene extends Phaser.Scene {
         <div class="queue-bar"><div class="queue-fill" style="width: ${progress}%"></div></div>
         <div class="queue-chips">${queued || '<span class="queue-chip">No follow-up</span>'}</div>
       </div>
+    `;
+  }
+
+  private currentWaveDelay(): number {
+    return this.wavesLaunched === 0 ? ENEMY_FIRST_WAVE_DELAY : ENEMY_WAVE_INTERVAL;
+  }
+
+  private updateThreatHud(): void {
+    const ocean = this.factions.get(ENEMY);
+    const reef = this.units.get(ocean?.baseUnitId ?? -1);
+    if (this.gameOver) {
+      this.hud.threat.innerHTML = `
+        <div class="threat-row">
+          <span class="threat-label">Battle</span>
+          <span class="threat-value">${reef ? 'Lost' : 'Won'}</span>
+        </div>
+        <div class="threat-state ${reef ? 'danger' : ''}">${reef ? '拠点を失いました' : 'Reef Nest 破壊完了'}</div>
+      `;
+      return;
+    }
+    const enemies = [...this.units.values()].filter((unit) => unit.faction === ENEMY && unit.def.role !== 'base');
+    const incoming = this.incomingEnemies();
+    const waveDelay = this.currentWaveDelay();
+    const timeLeft = Math.max(0, Math.ceil(waveDelay - this.waveTimer));
+    const progress = Phaser.Math.Clamp((this.waveTimer / waveDelay) * 100, 0, 100);
+    const reefHp = reef ? `${Math.ceil(reef.hp)}/${reef.def.maxHp}` : 'Destroyed';
+    const stateClass = incoming.length > 0 ? 'danger' : timeLeft <= ENEMY_WAVE_WARNING ? 'warning' : '';
+    const stateText = incoming.length > 0 ? `襲撃中 x${incoming.length}` : timeLeft <= ENEMY_WAVE_WARNING ? '敵襲接近' : '準備中';
+    this.hud.threat.innerHTML = `
+      <div class="threat-row">
+        <span class="threat-label">Next wave</span>
+        <span class="threat-value">${incoming.length > 0 ? 'Now' : `${timeLeft}s`}</span>
+      </div>
+      <div class="threat-meter"><div class="threat-fill" style="width: ${progress}%"></div></div>
+      <div class="threat-row">
+        <span class="threat-label">Ocean force</span>
+        <span class="threat-value">${enemies.length} units</span>
+      </div>
+      <div class="threat-row">
+        <span class="threat-label">Reef Nest</span>
+        <span class="threat-value">${reefHp}</span>
+      </div>
+      <div class="threat-state ${stateClass}">${stateText}</div>
     `;
   }
 
@@ -1228,7 +1361,15 @@ export class AnimalRTSScene extends Phaser.Scene {
       const choice = AI_PRODUCTION[Phaser.Math.Between(0, AI_PRODUCTION.length - 1)];
       this.tryProduce(choice, ENEMY);
     }
-    const waveDelay = this.wavesLaunched === 0 ? ENEMY_FIRST_WAVE_DELAY : ENEMY_WAVE_INTERVAL;
+    const waveDelay = this.currentWaveDelay();
+    if (!this.waveWarningShown && this.waveTimer > waveDelay - ENEMY_WAVE_WARNING) {
+      this.waveWarningShown = true;
+      this.log(`敵襲接近。次の波まで約 ${Math.max(1, Math.ceil(waveDelay - this.waveTimer))} 秒です。`);
+      this.playSound('alert');
+      this.showCommandPing(reef.x, reef.y, 0xf06a57);
+      this.updateHud();
+    }
+    let launched = 0;
     for (const unit of this.units.values()) {
       if (unit.faction !== ENEMY || unit.def.role === 'base') continue;
       if (unit.def.gatherRate && !unit.resourceTargetId) {
@@ -1243,13 +1384,17 @@ export class AnimalRTSScene extends Phaser.Scene {
         if (target) {
           unit.attackTargetId = target.id;
           this.setUnitDestination(unit, target.x, target.y);
+          launched += 1;
         }
       }
     }
     if (this.waveTimer > waveDelay) {
       this.waveTimer = 0;
       this.wavesLaunched += 1;
-      this.log('海洋勢力が群れで攻勢を開始しました。');
+      this.waveWarningShown = false;
+      this.playSound('alert');
+      this.log(launched > 0 ? `海洋勢力が ${launched} 体で攻勢を開始しました。` : '海洋勢力が攻勢準備を進めています。');
+      this.updateHud();
     }
   }
 

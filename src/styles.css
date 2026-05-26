@@ -84,11 +84,61 @@ header {
 
 #selection-body,
 #queue,
+#threat,
 #log,
 p {
   color: #c9d6c2;
   font-size: 13px;
   line-height: 1.45;
+}
+
+#threat {
+  display: grid;
+  gap: 7px;
+}
+
+.threat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.threat-label {
+  color: #91b781;
+}
+
+.threat-value {
+  color: #f2f7ee;
+  font-weight: 700;
+  text-align: right;
+}
+
+.threat-meter {
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid #4f684b;
+  border-radius: 4px;
+  background: #263a22;
+}
+
+.threat-fill {
+  height: 100%;
+  width: 0%;
+  background: #9fc7e8;
+}
+
+.threat-state {
+  color: #c9d6c2;
+  font-weight: 700;
+}
+
+.threat-state.warning {
+  color: #f2c66d;
+}
+
+.threat-state.danger {
+  color: #f06a57;
 }
 
 #queue {

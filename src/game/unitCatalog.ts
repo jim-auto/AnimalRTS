@@ -154,7 +154,7 @@ export const UNIT_DEFS: Record<string, UnitDefinition> = {
     emoji: 'C',
     faction: 'ocean',
     role: 'soldier',
-    moveLayer: 'surface',
+    moveLayer: 'amphibious',
     cost: 90,
     maxHp: 125,
     speed: 70,
@@ -164,7 +164,7 @@ export const UNIT_DEFS: Record<string, UnitDefinition> = {
     sight: 160,
     buildTime: 7,
     supply: 2,
-    description: '浅瀬を固める装甲兵。陸地には入れない。'
+    description: '浅瀬から陸へ上がる装甲兵。拠点への襲撃役。'
   },
   squid: {
     id: 'squid',

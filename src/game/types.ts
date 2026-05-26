@@ -1,7 +1,7 @@
 import type Phaser from 'phaser';
 
 export type FactionId = 'land' | 'ocean';
-export type MoveLayer = 'ground' | 'air' | 'surface' | 'deepsea';
+export type MoveLayer = 'ground' | 'air' | 'surface' | 'deepsea' | 'amphibious';
 export type Terrain = 'grass' | 'forest' | 'shore' | 'water' | 'deepwater' | 'reef';
 export type UnitRole = 'worker' | 'scout' | 'soldier' | 'siege' | 'base';
 
