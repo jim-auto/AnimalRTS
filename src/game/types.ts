@@ -37,6 +37,9 @@ export interface UnitEntity {
   selected: boolean;
   targetX?: number;
   targetY?: number;
+  path: Phaser.Math.Vector2[];
+  pathGoalX?: number;
+  pathGoalY?: number;
   attackTargetId?: number;
   resourceTargetId?: number;
   carrying: number;

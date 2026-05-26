@@ -83,11 +83,56 @@ header {
 }
 
 #selection-body,
+#queue,
 #log,
 p {
   color: #c9d6c2;
   font-size: 13px;
   line-height: 1.45;
+}
+
+#queue {
+  display: grid;
+  gap: 7px;
+}
+
+.queue-row {
+  display: grid;
+  gap: 5px;
+}
+
+.queue-title {
+  color: #edf2e8;
+  font-weight: 700;
+}
+
+.queue-bar {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #263a22;
+  border: 1px solid #4f684b;
+}
+
+.queue-fill {
+  height: 100%;
+  width: 0%;
+  background: #a7d28d;
+}
+
+.queue-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.queue-chip {
+  border: 1px solid #4f684b;
+  border-radius: 5px;
+  padding: 2px 6px;
+  background: #1d2c1b;
+  color: #c9d6c2;
+  font-size: 12px;
 }
 
 #mission-list {

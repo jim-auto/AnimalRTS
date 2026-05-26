@@ -13,6 +13,7 @@ const ENEMY_AI_INTERVAL = 3;
 const ENEMY_FIRST_WAVE_DELAY = 58;
 const ENEMY_WAVE_INTERVAL = 34;
 type MissionStep = 'gather' | 'produce' | 'scout' | 'destroy';
+type SoundCue = 'command' | 'gather' | 'deliver' | 'produce' | 'victory' | 'defeat';
 
 export class AnimalRTSScene extends Phaser.Scene {
   private terrain: Terrain[][] = [];
@@ -43,9 +44,11 @@ export class AnimalRTSScene extends Phaser.Scene {
   private logTimer = 0;
   private minimapCtx!: CanvasRenderingContext2D;
   private outcomeShown = false;
+  private audioContext?: AudioContext;
   private hud = {
     resources: document.querySelector<HTMLDivElement>('#resources')!,
     selection: document.querySelector<HTMLDivElement>('#selection-body')!,
+    queue: document.querySelector<HTMLDivElement>('#queue')!,
     production: document.querySelector<HTMLDivElement>('#production')!,
     mission: document.querySelector<HTMLOListElement>('#mission-list')!,
     minimap: document.querySelector<HTMLCanvasElement>('#minimap')!,
@@ -125,6 +128,10 @@ export class AnimalRTSScene extends Phaser.Scene {
     this.aiTimer += dt;
     this.waveTimer += dt;
     this.logTimer += dt;
+    if (this.logTimer > 0.25) {
+      this.logTimer = 0;
+      this.updateQueueHud();
+    }
     if (this.aiTimer > ENEMY_AI_INTERVAL) {
       this.aiTimer = 0;
       this.runAi();
@@ -193,6 +200,7 @@ export class AnimalRTSScene extends Phaser.Scene {
       hp: def.maxHp,
       radius: def.role === 'base' ? 34 : 17,
       selected: false,
+      path: [],
       carrying: 0,
       attackTimer: 0,
       produceTimer: 0,
@@ -309,30 +317,31 @@ export class AnimalRTSScene extends Phaser.Scene {
       this.log(`${this.formatGroup(selected)}: ${enemy.def.name} を攻撃します。`);
       if (enemy.def.id === 'reefNest') this.hasIssuedReefAttack = true;
       this.showCommandPing(enemy.x, enemy.y, 0xf06a57);
+      this.playSound('command');
     } else if (resource && gatherers.length > 0) {
       this.log(`${this.formatGroup(gatherers)}: ${this.formatResource(resource)} を採集します。満載になったら自動で拠点へ戻ります。`);
       this.showCommandPing(resource.x, resource.y, resource.type === 'berries' ? 0xf2c66d : 0x9af0ca);
+      this.playSound('gather');
     } else if (resource) {
       this.log(`${this.formatResource(resource)} は Ant Swarm などの採集ユニットで集められます。`);
       this.showCommandPing(resource.x, resource.y, 0xf06a57);
+      this.playSound('command');
     } else {
       this.log(`${this.formatGroup(selected)}: 移動します。`);
       this.showCommandPing(x, y, 0xd9f59f);
+      this.playSound('command');
     }
     selected.forEach((unit, index) => {
       unit.attackTargetId = enemy?.id;
       unit.resourceTargetId = !enemy && resource && unit.def.gatherRate && this.canOccupy(unit.def.moveLayer, resource.x, resource.y) ? resource.id : undefined;
       if (enemy) {
-        unit.targetX = enemy.x;
-        unit.targetY = enemy.y;
+        this.setUnitDestination(unit, enemy.x, enemy.y);
       } else if (resource && unit.def.gatherRate) {
-        unit.targetX = resource.x;
-        unit.targetY = resource.y;
+        this.setUnitDestination(unit, resource.x, resource.y);
       } else {
         const angle = (index / Math.max(1, selected.length)) * Math.PI * 2;
         const spread = selected.length > 1 ? 34 : 0;
-        unit.targetX = x + Math.cos(angle) * spread;
-        unit.targetY = y + Math.sin(angle) * spread;
+        this.setUnitDestination(unit, x + Math.cos(angle) * spread, y + Math.sin(angle) * spread);
       }
     });
     this.updateHud();
@@ -386,6 +395,194 @@ export class AnimalRTSScene extends Phaser.Scene {
     });
   }
 
+  private playSound(cue: SoundCue): void {
+    const AudioContextCtor = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return;
+    this.audioContext ??= new AudioContextCtor();
+    if (this.audioContext.state === 'suspended') void this.audioContext.resume();
+    const now = this.audioContext.currentTime;
+    const presets: Record<SoundCue, { frequency: number; duration: number; type: OscillatorType; gain: number }> = {
+      command: { frequency: 420, duration: 0.07, type: 'triangle', gain: 0.035 },
+      gather: { frequency: 610, duration: 0.09, type: 'sine', gain: 0.035 },
+      deliver: { frequency: 820, duration: 0.14, type: 'sine', gain: 0.045 },
+      produce: { frequency: 520, duration: 0.16, type: 'square', gain: 0.026 },
+      victory: { frequency: 740, duration: 0.28, type: 'triangle', gain: 0.045 },
+      defeat: { frequency: 180, duration: 0.35, type: 'sawtooth', gain: 0.03 }
+    };
+    const preset = presets[cue];
+    const oscillator = this.audioContext.createOscillator();
+    const gain = this.audioContext.createGain();
+    oscillator.type = preset.type;
+    oscillator.frequency.setValueAtTime(preset.frequency, now);
+    if (cue === 'victory') oscillator.frequency.exponentialRampToValueAtTime(preset.frequency * 1.45, now + preset.duration);
+    if (cue === 'defeat') oscillator.frequency.exponentialRampToValueAtTime(Math.max(60, preset.frequency * 0.55), now + preset.duration);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(preset.gain, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + preset.duration);
+    oscillator.connect(gain);
+    gain.connect(this.audioContext.destination);
+    oscillator.start(now);
+    oscillator.stop(now + preset.duration + 0.02);
+  }
+
+  private setUnitDestination(unit: UnitEntity, x: number, y: number): void {
+    unit.pathGoalX = x;
+    unit.pathGoalY = y;
+    const path = this.findPath(unit, x, y);
+    unit.path = path;
+    const next = unit.path.shift();
+    unit.targetX = next?.x ?? x;
+    unit.targetY = next?.y ?? y;
+  }
+
+  private findPath(unit: UnitEntity, x: number, y: number): Phaser.Math.Vector2[] {
+    if (unit.def.moveLayer === 'air') {
+      return [new Phaser.Math.Vector2(Phaser.Math.Clamp(x, 20, WORLD_W - 20), Phaser.Math.Clamp(y, 20, WORLD_H - 20))];
+    }
+
+    const start = this.worldToTile(unit.x, unit.y);
+    const goal = this.findNearestReachableTile(unit.def.moveLayer, x, y);
+    if (!goal) return [new Phaser.Math.Vector2(x, y)];
+    if (start.x === goal.x && start.y === goal.y) return [new Phaser.Math.Vector2(x, y)];
+
+    const open = new Set<number>();
+    const closed = new Set<number>();
+    const cameFrom = new Map<number, number>();
+    const gScore = new Map<number, number>();
+    const fScore = new Map<number, number>();
+    const startKey = this.tileKey(start.x, start.y);
+    const goalKey = this.tileKey(goal.x, goal.y);
+    open.add(startKey);
+    gScore.set(startKey, 0);
+    fScore.set(startKey, this.tileDistance(start.x, start.y, goal.x, goal.y));
+
+    while (open.size > 0) {
+      let currentKey = -1;
+      let currentScore = Number.POSITIVE_INFINITY;
+      for (const key of open) {
+        const score = fScore.get(key) ?? Number.POSITIVE_INFINITY;
+        if (score < currentScore) {
+          currentScore = score;
+          currentKey = key;
+        }
+      }
+      if (currentKey === goalKey) return this.reconstructPath(cameFrom, currentKey, x, y, goal);
+
+      open.delete(currentKey);
+      closed.add(currentKey);
+      const current = this.keyToTile(currentKey);
+      for (const neighbor of this.neighborTiles(unit.def.moveLayer, current.x, current.y)) {
+        const neighborKey = this.tileKey(neighbor.x, neighbor.y);
+        if (closed.has(neighborKey)) continue;
+        const stepCost = neighbor.x !== current.x && neighbor.y !== current.y ? 1.4 : 1;
+        const tentativeG = (gScore.get(currentKey) ?? Number.POSITIVE_INFINITY) + stepCost;
+        if (tentativeG >= (gScore.get(neighborKey) ?? Number.POSITIVE_INFINITY)) continue;
+        cameFrom.set(neighborKey, currentKey);
+        gScore.set(neighborKey, tentativeG);
+        fScore.set(neighborKey, tentativeG + this.tileDistance(neighbor.x, neighbor.y, goal.x, goal.y));
+        open.add(neighborKey);
+      }
+    }
+
+    return [new Phaser.Math.Vector2(goal.x * TILE + TILE / 2, goal.y * TILE + TILE / 2)];
+  }
+
+  private reconstructPath(cameFrom: Map<number, number>, currentKey: number, targetX: number, targetY: number, goal: Phaser.Math.Vector2): Phaser.Math.Vector2[] {
+    const keys = [currentKey];
+    while (cameFrom.has(currentKey)) {
+      currentKey = cameFrom.get(currentKey)!;
+      keys.push(currentKey);
+    }
+    keys.reverse();
+    const waypoints = keys.slice(1).map((key) => {
+      const tile = this.keyToTile(key);
+      return new Phaser.Math.Vector2(tile.x * TILE + TILE / 2, tile.y * TILE + TILE / 2);
+    });
+    if (waypoints.length > 0 && goal.x === Math.floor(targetX / TILE) && goal.y === Math.floor(targetY / TILE)) {
+      waypoints[waypoints.length - 1] = new Phaser.Math.Vector2(targetX, targetY);
+    }
+    return this.smoothPath(waypoints);
+  }
+
+  private smoothPath(path: Phaser.Math.Vector2[]): Phaser.Math.Vector2[] {
+    if (path.length < 3) return path;
+    const smoothed: Phaser.Math.Vector2[] = [path[0]];
+    for (let i = 1; i < path.length - 1; i += 1) {
+      const prev = smoothed[smoothed.length - 1];
+      const current = path[i];
+      const next = path[i + 1];
+      const dx1 = Math.sign(current.x - prev.x);
+      const dy1 = Math.sign(current.y - prev.y);
+      const dx2 = Math.sign(next.x - current.x);
+      const dy2 = Math.sign(next.y - current.y);
+      if (dx1 !== dx2 || dy1 !== dy2) smoothed.push(current);
+    }
+    smoothed.push(path[path.length - 1]);
+    return smoothed;
+  }
+
+  private neighborTiles(layer: MoveLayer, x: number, y: number): Phaser.Math.Vector2[] {
+    const result: Phaser.Math.Vector2[] = [];
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = x + dx;
+        const ny = y + dy;
+        if (!this.canOccupyTile(layer, nx, ny)) continue;
+        if (dx !== 0 && dy !== 0 && (!this.canOccupyTile(layer, x + dx, y) || !this.canOccupyTile(layer, x, y + dy))) continue;
+        result.push(new Phaser.Math.Vector2(nx, ny));
+      }
+    }
+    return result;
+  }
+
+  private findNearestReachableTile(layer: MoveLayer, x: number, y: number): Phaser.Math.Vector2 | undefined {
+    const target = this.worldToTile(x, y);
+    if (this.canOccupyTile(layer, target.x, target.y)) return target;
+    let best: Phaser.Math.Vector2 | undefined;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let radius = 1; radius <= 8; radius += 1) {
+      for (let ty = target.y - radius; ty <= target.y + radius; ty += 1) {
+        for (let tx = target.x - radius; tx <= target.x + radius; tx += 1) {
+          if (Math.abs(tx - target.x) !== radius && Math.abs(ty - target.y) !== radius) continue;
+          if (!this.canOccupyTile(layer, tx, ty)) continue;
+          const distance = Phaser.Math.Distance.Between(tx * TILE + TILE / 2, ty * TILE + TILE / 2, x, y);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = new Phaser.Math.Vector2(tx, ty);
+          }
+        }
+      }
+      if (best) return best;
+    }
+    return undefined;
+  }
+
+  private worldToTile(x: number, y: number): Phaser.Math.Vector2 {
+    return new Phaser.Math.Vector2(Phaser.Math.Clamp(Math.floor(x / TILE), 0, MAP_W - 1), Phaser.Math.Clamp(Math.floor(y / TILE), 0, MAP_H - 1));
+  }
+
+  private canOccupyTile(layer: MoveLayer, tx: number, ty: number): boolean {
+    if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return false;
+    if (layer === 'air') return true;
+    const terrain = this.terrain[ty][tx];
+    if (layer === 'ground') return terrain === 'grass' || terrain === 'forest' || terrain === 'shore';
+    if (layer === 'surface') return terrain === 'water' || terrain === 'shore' || terrain === 'reef';
+    return terrain === 'deepwater' || terrain === 'reef' || terrain === 'water';
+  }
+
+  private tileKey(x: number, y: number): number {
+    return y * MAP_W + x;
+  }
+
+  private keyToTile(key: number): Phaser.Math.Vector2 {
+    return new Phaser.Math.Vector2(key % MAP_W, Math.floor(key / MAP_W));
+  }
+
+  private tileDistance(x1: number, y1: number, x2: number, y2: number): number {
+    return Math.hypot(x1 - x2, y1 - y2);
+  }
+
   private updateUnits(dt: number): void {
     for (const unit of [...this.units.values()]) {
       unit.attackTimer = Math.max(0, unit.attackTimer - dt);
@@ -420,8 +617,7 @@ export class AnimalRTSScene extends Phaser.Scene {
       return;
     }
     if (unit.carrying >= 45) {
-      unit.targetX = base.x;
-      unit.targetY = base.y;
+      if (unit.pathGoalX !== base.x || unit.pathGoalY !== base.y) this.setUnitDestination(unit, base.x, base.y);
       if (Phaser.Math.Distance.Between(unit.x, unit.y, base.x, base.y) < 62) {
         const delivered = Math.floor(unit.carrying);
         this.factions.get(unit.faction)!.food += delivered;
@@ -429,11 +625,11 @@ export class AnimalRTSScene extends Phaser.Scene {
         if (unit.faction === PLAYER) {
           this.hasGatheredFood = true;
           this.showDeliveredFood(unit, delivered);
+          this.playSound('deliver');
           this.log(`${unit.def.name} が Food ${delivered} を納品しました。`);
           this.updateHud();
         }
-        unit.targetX = resource.x;
-        unit.targetY = resource.y;
+        this.setUnitDestination(unit, resource.x, resource.y);
       }
       return;
     }
@@ -455,16 +651,23 @@ export class AnimalRTSScene extends Phaser.Scene {
     const target = this.units.get(unit.attackTargetId);
     if (!target) {
       unit.attackTargetId = undefined;
+      unit.path = [];
+      unit.pathGoalX = undefined;
+      unit.pathGoalY = undefined;
       return;
     }
     const distance = Phaser.Math.Distance.Between(unit.x, unit.y, target.x, target.y);
     if (distance > unit.def.attackRange) {
-      unit.targetX = target.x;
-      unit.targetY = target.y;
+      if (unit.pathGoalX === undefined || unit.pathGoalY === undefined || Phaser.Math.Distance.Between(unit.pathGoalX, unit.pathGoalY, target.x, target.y) > 32) {
+        this.setUnitDestination(unit, target.x, target.y);
+      }
       return;
     }
     unit.targetX = undefined;
     unit.targetY = undefined;
+    unit.path = [];
+    unit.pathGoalX = undefined;
+    unit.pathGoalY = undefined;
     if (unit.attackTimer <= 0) {
       const packBonus = unit.def.id === 'wolf' ? 1 + this.countNearbyAttackers(target.id, 'wolf') * 0.08 : 1;
       target.hp -= unit.def.attackDamage * packBonus;
@@ -482,8 +685,13 @@ export class AnimalRTSScene extends Phaser.Scene {
     const dy = unit.targetY - unit.y;
     const distance = Math.hypot(dx, dy);
     if (distance < 6) {
-      unit.targetX = undefined;
-      unit.targetY = undefined;
+      const next = unit.path.shift();
+      unit.targetX = next?.x;
+      unit.targetY = next?.y;
+      if (!next) {
+        unit.pathGoalX = undefined;
+        unit.pathGoalY = undefined;
+      }
       return;
     }
     const step = Math.min(distance, unit.def.speed * dt);
@@ -546,6 +754,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     this.spawnUnit(nextType, spawn.x, spawn.y, base.faction);
     if (base.faction === PLAYER) {
       this.log(`${nextDef.name} の生産が完了しました。`);
+      this.playSound('produce');
       this.updateHud();
     }
   }
@@ -556,12 +765,14 @@ export class AnimalRTSScene extends Phaser.Scene {
     if (!builder || builder.hp <= 0) return;
     const distance = Phaser.Math.Distance.Between(builder.x, builder.y, building.x, building.y);
     if (distance > building.radius + 28) {
-      builder.targetX = building.x;
-      builder.targetY = building.y;
+      if (builder.pathGoalX !== building.x || builder.pathGoalY !== building.y) this.setUnitDestination(builder, building.x, building.y);
       return;
     }
     builder.targetX = undefined;
     builder.targetY = undefined;
+    builder.path = [];
+    builder.pathGoalX = undefined;
+    builder.pathGoalY = undefined;
     building.buildProgress += dt;
     const constructionTime = building.def.constructionTime ?? 1;
     building.hp = Math.max(1, building.def.maxHp * Math.min(1, building.buildProgress / constructionTime));
@@ -613,6 +824,7 @@ export class AnimalRTSScene extends Phaser.Scene {
       ? 'Reef Nest を破壊しました。陸上勢力の勝利です。'
       : 'すべての拠点を失いました。海洋勢力に押し切られました。';
     this.hud.outcome.hidden = false;
+    this.playSound(victory ? 'victory' : 'defeat');
     this.log(victory ? 'Reef Nest を破壊しました。勝利です。' : '拠点がすべて破壊されました。敗北です。');
     this.updateHud();
     this.drawMinimap();
@@ -884,8 +1096,7 @@ export class AnimalRTSScene extends Phaser.Scene {
     building.hp = Math.max(1, def.maxHp * 0.12);
     building.label.setAlpha(0.55);
     building.productionQueue = [];
-    worker.targetX = x;
-    worker.targetY = y;
+    this.setUnitDestination(worker, x, y);
     this.setSelection([building.id]);
     this.log('建築現場を設置しました。Ant Swarm が近くで作業すると完成します。');
     this.updateHud();
@@ -912,7 +1123,35 @@ export class AnimalRTSScene extends Phaser.Scene {
       const hasWorker = [...this.selectedIds].some((id) => this.units.get(id)?.def.role === 'worker');
       button.disabled = this.gameOver || (player?.food ?? 0) < cost || (needsWorker && !hasWorker);
     }
+    this.updateQueueHud();
     this.updateMission();
+  }
+
+  private updateQueueHud(): void {
+    const selected = [...this.selectedIds].map((id) => this.units.get(id)).filter((unit): unit is UnitEntity => Boolean(unit));
+    const base = selected.find((unit) => unit.faction === PLAYER && unit.def.role === 'base') ?? this.findNearestBase(PLAYER, this.cameras.main.worldView.centerX, this.cameras.main.worldView.centerY);
+    if (!base) {
+      this.hud.queue.textContent = '生産できる拠点がありません';
+      return;
+    }
+    if (base.underConstruction) {
+      this.hud.queue.innerHTML = `<div class="queue-row"><div class="queue-title">${base.def.name}</div><div>Building ${Math.min(99, Math.floor((base.buildProgress / (base.def.constructionTime ?? 1)) * 100))}%</div></div>`;
+      return;
+    }
+    if (base.productionQueue.length === 0) {
+      this.hud.queue.innerHTML = `<div class="queue-row"><div class="queue-title">${base.def.name}</div><div>Queue empty</div></div>`;
+      return;
+    }
+    const current = UNIT_DEFS[base.productionQueue[0]];
+    const progress = Math.min(99, Math.floor((base.produceTimer / current.buildTime) * 100));
+    const queued = base.productionQueue.slice(1).map((id) => `<span class="queue-chip">${UNIT_DEFS[id].name}</span>`).join('');
+    this.hud.queue.innerHTML = `
+      <div class="queue-row">
+        <div class="queue-title">${base.def.name}: ${current.name}</div>
+        <div class="queue-bar"><div class="queue-fill" style="width: ${progress}%"></div></div>
+        <div class="queue-chips">${queued || '<span class="queue-chip">No follow-up</span>'}</div>
+      </div>
+    `;
   }
 
   private updateMission(): void {
@@ -996,16 +1235,14 @@ export class AnimalRTSScene extends Phaser.Scene {
         const resource = [...this.resources.values()].find((r) => r.type === 'kelp' && this.canOccupy(unit.def.moveLayer, r.x, r.y));
         if (resource) {
           unit.resourceTargetId = resource.id;
-          unit.targetX = resource.x;
-          unit.targetY = resource.y;
+          this.setUnitDestination(unit, resource.x, resource.y);
         }
       }
       if (this.waveTimer > waveDelay && unit.def.role !== 'worker') {
         const target = this.units.get(this.factions.get(PLAYER)?.baseUnitId ?? -1);
         if (target) {
           unit.attackTargetId = target.id;
-          unit.targetX = target.x;
-          unit.targetY = target.y;
+          this.setUnitDestination(unit, target.x, target.y);
         }
       }
     }
